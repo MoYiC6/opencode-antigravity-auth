@@ -2809,6 +2809,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   const account = existingStorage.accounts[verifyAccountIndex];
                   if (!account) {
                     console.log(`\nAccount ${verifyAccountIndex + 1} not found.\n`);
+                    await promptOAuthCallbackValue("\nPress Enter to return to menu...");
                     continue;
                   }
 
@@ -2829,6 +2830,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     } else {
                       console.log(`✓ ${label} is ready for requests.\n`);
                     }
+                    await promptOAuthCallbackValue("\nPress Enter to return to menu...");
                     continue;
                   }
 
@@ -2866,10 +2868,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     } else {
                       console.log("No verification URL was returned. Try re-authenticating this account.\n");
                     }
+                    await promptOAuthCallbackValue("\nPress Enter to return to menu...");
                     continue;
                   }
 
                   console.log(`✗ ${label}: ${verification.message}\n`);
+                  await promptOAuthCallbackValue("\nPress Enter to return to menu...");
                   continue;
                 }
 
