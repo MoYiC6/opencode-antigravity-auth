@@ -12,7 +12,6 @@ import {
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
-import * as lockfile from "proper-lockfile";
 import type { HeaderStyle } from "../constants";
 import { createLogger } from "./logger";
 
@@ -357,6 +356,63 @@ const LOCK_OPTIONS = {
   },
 };
 
+function getLockPath(path: string): string {
+  return `${path}.lock`;
+}
+
+function getRetryDelay(attempt: number): number {
+  const baseDelay = LOCK_OPTIONS.retries.minTimeout * LOCK_OPTIONS.retries.factor ** attempt;
+  return Math.min(baseDelay, LOCK_OPTIONS.retries.maxTimeout);
+}
+
+function isErrorWithCode(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && "code" in error && typeof error.code === "string";
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireFileLock(path: string): Promise<() => Promise<void>> {
+  const lockPath = getLockPath(path);
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.mkdir(lockPath);
+      return async () => {
+        try {
+          await fs.rm(lockPath, { recursive: true, force: true });
+        } catch (error) {
+          log.warn("Failed to release lock", { error: String(error), lockPath });
+        }
+      };
+    } catch (error) {
+      if (!isErrorWithCode(error) || error.code !== "EEXIST") {
+        throw error;
+      }
+
+      try {
+        const stat = await fs.stat(lockPath);
+        if (Date.now() - stat.mtimeMs > LOCK_OPTIONS.stale) {
+          await fs.rm(lockPath, { recursive: true, force: true });
+          continue;
+        }
+      } catch (statError) {
+        if (!isErrorWithCode(statError) || statError.code !== "ENOENT") {
+          throw statError;
+        }
+        continue;
+      }
+
+      if (attempt >= LOCK_OPTIONS.retries.retries) {
+        throw new Error(`Failed to acquire file lock for ${path}`);
+      }
+
+      await sleep(getRetryDelay(attempt));
+    }
+  }
+}
+
 /**
  * Ensures the file has secure permissions (0600) on POSIX systems.
  * This is a best-effort operation and ignores errors on Windows/unsupported FS.
@@ -386,14 +442,14 @@ async function withFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   await ensureFileExists(path);
   let release: (() => Promise<void>) | null = null;
   try {
-    release = await lockfile.lock(path, LOCK_OPTIONS);
+    release = await acquireFileLock(path);
     return await fn();
   } finally {
     if (release) {
       try {
         await release();
       } catch (unlockError) {
-        log.warn("Failed to release lock", { error: String(unlockError) });
+        log.warn("Failed to release lock", { error: String(unlockError), path });
       }
     }
   }
